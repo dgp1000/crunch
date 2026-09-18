@@ -293,13 +293,17 @@ function computeStep(a, op, b) {
   }
 }
 
-// Replay steps against the pool. Returns the live tile list (originals
-// t0..t5 then derived d1..dN, each with used flag + expression string) and
-// a detail trace for the on-screen working. Stops at the first step that
+// Replay steps against the pool. Returns the full tile list (originals
+// t0..t5 then derived d1..dN, each with used flag + expression string), a
+// detail trace for the on-screen working, and the ids of the live tiles in
+// board order. Stops at the first step that
 // can't be applied, so a corrupt saved round degrades to a shorter one.
 function replaySteps(pool, steps) {
   const tiles = pool.map((v, i) => ({ id: `t${i}`, value: v, expr: String(v), used: false, derived: false }));
   const detail = [];
+  // Board order: the new tile takes the slot of the first tile tapped and
+  // the second tile's slot closes up, so the row shrinks by one per step.
+  const order = tiles.map(t => t.id);
   const byId = id => tiles.find(t => t.id === id);
   for (let i = 0; i < (steps || []).length; i++) {
     const s = steps[i];
@@ -311,9 +315,11 @@ function replaySteps(pool, steps) {
     const [ea, eb] = r.a === a.value && (r.b === b.value) ? [a.expr, b.expr] : [b.expr, a.expr];
     const nt = { id: `d${i + 1}`, value: r.value, expr: `(${ea} ${s.op} ${eb})`, used: false, derived: true };
     tiles.push(nt);
+    order[order.indexOf(a.id)] = nt.id;
+    order.splice(order.indexOf(b.id), 1);
     detail.push({ a: r.a, op: s.op, b: r.b, value: r.value, tileId: nt.id });
   }
-  return { tiles, detail };
+  return { tiles, detail, order };
 }
 
 // Closest tile to the target among everything the player has made. Ties go
@@ -342,7 +348,6 @@ const lockedShareBtn  = document.getElementById("lockedShareBtn");
 const lockedCountdown = document.getElementById("lockedCountdown");
 const boardEl         = document.getElementById("board");
 const numbersRow      = document.getElementById("numbersRow");
-const derivedRow      = document.getElementById("derivedRow");
 const stepsList       = document.getElementById("stepsList");
 const stepsEmpty      = document.getElementById("stepsEmpty");
 const undoBtn         = document.getElementById("undoBtn");
@@ -1038,8 +1043,8 @@ async function shareResult(btn) {
 // --- Rendering ---
 function render() {
   targetEl.textContent = String(state.target);
-  const { tiles, detail } = replaySteps(state.pool, state.steps);
-  renderTiles(tiles);
+  const { tiles, detail, order } = replaySteps(state.pool, state.steps);
+  renderTiles(tiles, order);
   renderSteps(detail);
   renderControls(detail);
   renderHint();
@@ -1070,7 +1075,6 @@ function makeTileButton(t) {
   btn.type = "button";
   btn.className = "tile";
   if (t.derived) btn.classList.add("derived");
-  if (t.used) btn.classList.add("used");
   if (state.sel.aId === t.id) btn.classList.add("selected");
   btn.disabled = state.phase !== "running" || t.used;
   btn.textContent = String(t.value);
@@ -1078,9 +1082,8 @@ function makeTileButton(t) {
   return btn;
 }
 
-function renderTiles(tiles) {
+function renderTiles(tiles, order) {
   numbersRow.innerHTML = "";
-  derivedRow.innerHTML = "";
   if (state.phase === "idle") {
     // Concealed tiles: tapping any one reveals the board and starts the clock.
     for (let i = 0; i < state.pool.length; i++) {
@@ -1092,13 +1095,10 @@ function renderTiles(tiles) {
       btn.addEventListener("click", () => tapTile(null));
       numbersRow.appendChild(btn);
     }
-    derivedRow.hidden = true;
     return;
   }
-  const derived = tiles.filter(t => t.derived);
-  tiles.filter(t => !t.derived).forEach(t => numbersRow.appendChild(makeTileButton(t)));
-  derived.forEach(t => derivedRow.appendChild(makeTileButton(t)));
-  derivedRow.hidden = derived.length === 0;
+  const byId = new Map(tiles.map(t => [t.id, t]));
+  order.forEach(id => numbersRow.appendChild(makeTileButton(byId.get(id))));
 }
 
 function renderSteps(detail) {

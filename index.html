@@ -83,13 +83,10 @@
     </div>
 
     <section class="board" id="board">
-      <!-- The six starting tiles. Before the round starts they show "?" —
-           tapping any of them reveals the numbers and starts the clock. -->
+      <!-- The live tiles. Before the round starts they show "?" — tapping any
+           of them reveals the numbers and starts the clock. Each step swaps
+           the two tiles used for the one made, so the row shrinks. -->
       <div class="numbers-row" id="numbersRow"></div>
-
-      <!-- Tiles the player has made by combining others. Hidden until the
-           first step. -->
-      <div class="numbers-row derived-row" id="derivedRow" hidden></div>
 
       <div class="operators">
         <button class="op-btn" data-op="+" type="button">+</button>

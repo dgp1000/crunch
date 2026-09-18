@@ -141,6 +141,16 @@ const s5 = T.replaySteps(pool, [{ aId: "t4", op: "÷", bId: "t5" }]);
 check("an invalid step stops the replay",
   s5.detail.length === 0 && s5.tiles.length === 6, "0 steps applied", s5.detail);
 
+check("board order: new tile takes the first-tapped slot, second slot closes up",
+  JSON.stringify(s1.order) === JSON.stringify(["d1", "t2", "t3", "t4", "t5"]),
+  ["d1", "t2", "t3", "t4", "t5"], s1.order);
+check("board order after a second step using the made tile",
+  JSON.stringify(s2.order) === JSON.stringify(["d2", "t3", "t4", "t5"]),
+  ["d2", "t3", "t4", "t5"], s2.order);
+check("board order with a swapped subtraction still follows tap order",
+  JSON.stringify(s3.order) === JSON.stringify(["d1", "t2", "t3", "t4", "t5"]),
+  ["d1", "t2", "t3", "t4", "t5"], s3.order);
+
 console.log("\nbestTile:");
 check("no derived tiles → null", T.bestTile(s0.tiles, 472) === null, null, T.bestTile(s0.tiles, 472));
 check("picks the closest made tile", T.bestTile(s2.tiles, 470).id === "d2", "d2", T.bestTile(s2.tiles, 470));

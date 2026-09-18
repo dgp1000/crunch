@@ -295,11 +295,15 @@ main {
   gap: 0.6rem;
 }
 
-/* Number tiles */
+/* Number tiles. Flex rather than grid so the row stays centred as tiles
+   are consumed; each tile keeps the width it would have in a 6-up grid. */
 .numbers-row {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  display: flex;
+  justify-content: center;
   gap: 0.4rem;
+}
+.numbers-row .tile {
+  flex: 0 0 calc((100% - 5 * 0.4rem) / 6);
 }
 
 .tile {
@@ -326,7 +330,6 @@ main {
   background: rgba(79, 140, 255, 0.18);
   box-shadow: 0 0 0 2px var(--accent) inset, 0 0 12px rgba(79, 140, 255, 0.35);
 }
-.tile.used { opacity: 0.25; cursor: not-allowed; text-decoration: line-through; }
 .tile.derived { border-style: dashed; border-color: var(--accent); color: var(--text); }
 .tile.hidden-tile {
   color: var(--text-dim);
@@ -335,10 +338,6 @@ main {
   opacity: 0.8;
 }
 .tile.hidden-tile:hover { border-color: var(--green); color: var(--text); }
-/* Made tiles sit in their own row under the originals; left-aligned in
-   the same 6-column grid so they line up with the tiles above. */
-.derived-row[hidden] { display: none; }
-
 /* Working — one line per step, plus Undo/Cancel. */
 .steps-box {
   background: var(--surface);
