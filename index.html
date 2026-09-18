@@ -16,13 +16,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700;800&display=swap" />
-  <link rel="stylesheet" href="styles.css?v=50" />
+  <link rel="stylesheet" href="styles.css?v=51" />
   <script>
-    // Set the theme attribute synchronously before the stylesheet kicks in,
-    // so first paint is correct. Order of precedence:
-    //   1. Explicit user choice in localStorage
-    //   2. OS preference via prefers-color-scheme
-    //   3. Dark (last-resort default).
+    // Theme follows the OS. A stored explicit choice from the old toggle
+    // is still honoured so nobody's preference silently flips.
     (function() {
       try {
         var stored = localStorage.getItem("crunch:theme");
@@ -43,26 +40,25 @@
     <div class="header-inner">
       <div class="puzzle-date" id="puzzleDate" aria-label="Today's puzzle date"></div>
       <button id="helpBtn" class="help-btn" type="button" aria-label="How to play">?</button>
-      <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle light or dark mode"></button>
       <h1>Crunch</h1>
-      <p class="tagline">Hit the target — the faster, the better. You've got 5 minutes.</p>
+      <p class="tagline">Combine the tiles to hit the target.</p>
     </div>
   </header>
 
   <main>
-    <!-- Target alone at the top — the goal you're solving for. -->
     <section class="target-banner">
       <div class="target-label">Target</div>
       <div class="target-number" id="target">—</div>
     </section>
 
     <section class="timer-section" aria-label="Time remaining">
-      <div class="timer-bar" id="timerBar" role="timer" aria-live="off"></div>
+      <div class="timer-bar" id="timerBar" role="timer" aria-live="off">
+        <div class="timer-fill" id="timerFill"></div>
+      </div>
       <div class="timer-readout"><span id="timerReadout">5:00</span> left</div>
     </section>
 
-    <div class="start-area" id="startArea">
-      <button id="startBtn" class="primary big" type="button">Start 5-minute round</button>
+    <div class="start-area" id="startArea" hidden>
       <div id="lockedNotice" class="locked-notice" hidden>
         <strong>Today's puzzle has been completed.</strong>
         <p id="lockedSummary"></p>
@@ -86,69 +82,36 @@
       </div>
     </div>
 
-    <section class="board">
-      <!-- 1. Tiles -->
+    <section class="board" id="board">
+      <!-- The six starting tiles. Before the round starts they show "?" —
+           tapping any of them reveals the numbers and starts the clock. -->
       <div class="numbers-row" id="numbersRow"></div>
 
-      <!-- 2. Operators + parens -->
+      <!-- Tiles the player has made by combining others. Hidden until the
+           first step. -->
+      <div class="numbers-row derived-row" id="derivedRow" hidden></div>
+
       <div class="operators">
         <button class="op-btn" data-op="+" type="button">+</button>
         <button class="op-btn" data-op="−" type="button">−</button>
         <button class="op-btn" data-op="×" type="button">×</button>
         <button class="op-btn" data-op="÷" type="button">÷</button>
-        <button class="op-btn" data-op="(" type="button">(</button>
-        <button class="op-btn" data-op=")" type="button">)</button>
       </div>
 
-      <!-- 3. Results box — your in-progress expression, the live value
-           it computes to, and inline edit controls. Reads as one
-           "equation in progress" block. -->
-      <div class="results-box">
-        <div class="expr-wrap">
-          <input
-            id="exprInput"
-            type="text"
-            inputmode="none"
-            readonly
-            tabindex="-1"
-            autocomplete="off"
-            autocapitalize="off"
-            spellcheck="false"
-            placeholder=" "
-          />
-          <!-- Marquee-style hint that scrolls left-to-right inside the
-               expression box when it's empty, so the full instruction
-               reads even on narrow viewports. Hidden once the player
-               starts building (input no longer matches :placeholder-shown). -->
-          <div class="expr-hint" aria-hidden="true">
-            <span>Tap the tiles, ops, and parenthesis above to build your equation…</span>
-          </div>
-        </div>
-        <div class="equals-row">
-          <button id="resetBtn" class="edit-btn" type="button">Clear</button>
-          <div class="equals-divider" aria-hidden="true"></div>
-          <button id="backspaceBtn" class="edit-btn" type="button" aria-label="Backspace">⌫</button>
-        </div>
-        <div class="results-equals">
-          <span class="current-number" id="current">Total</span>
-        </div>
-        <!-- Accessible-only hint kept for screen readers; the visible
-             marquee is aria-hidden, so without this assistive tech users
-             would lose the instruction. Hidden visually via .sr-only. -->
-        <div class="builder-hint sr-only" id="builderHint">Tap the tiles, ops, and parenthesis above.</div>
+      <!-- Working: one line per step, newest last, plus Undo. -->
+      <div class="steps-box">
+        <ol class="steps-list" id="stepsList"></ol>
+        <p class="steps-empty" id="stepsEmpty">Tap a tile, an operator, then another tile.</p>
+        <button id="undoBtn" class="undo-btn" type="button">Undo</button>
       </div>
 
-      <!-- 4. Hint row — progressive nudge for stuck players. Starts
-           hidden so it doesn't flash visible before JS runs; renderHint
-           reveals it once the round is running and an expression exists. -->
       <div class="hint-row is-hidden" id="hintRow" hidden>
         <button id="hintBtn" class="hint-btn" type="button">Need a hint?</button>
         <div class="hint-display" id="hintDisplay" hidden></div>
       </div>
 
-      <!-- 5. Submit guess — full-width primary action. -->
       <div class="controls">
-        <button id="submitBtn" class="primary" type="button">Submit guess</button>
+        <button id="submitBtn" class="primary" type="button">I'm done — score it</button>
       </div>
     </section>
 
@@ -183,20 +146,18 @@
     <div class="modal-content">
       <h2>How Crunch works</h2>
       <ul class="intro-list">
-        <li>Combine the six tiles with <strong>+ − × ÷</strong> and parentheses to hit the target.</li>
-        <li>Each tile can be used <strong>once</strong>; you don't have to use them all.</li>
-        <li>You've got <strong>5 minutes</strong> — the faster you solve, the more points.</li>
-        <li>Scoring: exact = up to 10 pts, within 5 = up to 7, within 10 = up to 5.</li>
-        <li>Stuck? Tap <strong>Hint</strong> for a nudge — each press reveals a bit more (your share shows how many you used).</li>
+        <li>Tap a tile, an operator, then another tile. They combine into a new tile.</li>
+        <li>Make the <strong>target</strong> and you're done. Faster means more points; you've got 5 minutes.</li>
+        <li>Each tile can be used once. No negatives, no fractions.</li>
       </ul>
-      <p class="intro-example">e.g. target <strong>472</strong> → <code>(75 × 6) + 22</code></p>
+      <p class="intro-example">e.g. target <strong>472</strong> → <code>75 × 6 = 450</code>, then <code>450 + 22 = 472</code></p>
       <div class="modal-buttons">
         <button id="introCloseBtn" class="primary" type="button">Got it — let's play</button>
       </div>
     </div>
   </div>
 
-  <script src="script.js?v=32"></script>
+  <script src="script.js?v=33"></script>
   <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "81ef4e3318a44a1ba9fe61597e36bcfe"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

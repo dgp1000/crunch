@@ -59,11 +59,11 @@ sandbox.removeEventListener = function() {};
 
 const src = fs.readFileSync(SCRIPT_PATH, "utf8") + `
 ;globalThis.__T = {
-  pointsFor, parseAndEvaluate, tokenize, formatClock,
+  pointsFor, tokenize, formatClock,
+  computeStep, replaySteps, bestTile, stripOuterParens,
   seedFromString, mulberry32, solve, TIME_LIMIT_MS,
   parseSolverExpr, tilesInComputeOrder, stepsInComputeOrder,
   buildHintLevels, buildHintText, hintLevelsCount,
-  setPool(pool) { state.pool = pool; },
 };
 `;
 vm.createContext(sandbox);
@@ -97,30 +97,55 @@ check("null distance (no guess) = 0",
 check("exact + timed out = 1 (base point only)",
   T.pointsFor(0, T.TIME_LIMIT_MS) === 1, 1, T.pointsFor(0, T.TIME_LIMIT_MS));
 
-console.log("\nparseAndEvaluate (strict Countdown rules):");
-T.setPool([100, 75, 50, 25, 10, 8, 6, 5, 4, 3, 2, 20, 22]);
-check("simple add",        T.parseAndEvaluate("100 + 5 + 4") === 109, 109, T.parseAndEvaluate("100 + 5 + 4"));
-check("parens + multiply", T.parseAndEvaluate("(75 × 6) + 22") === 472, 472, T.parseAndEvaluate("(75 × 6) + 22"));
-check("op precedence",     T.parseAndEvaluate("2 + 3 × 4") === 14, 14, T.parseAndEvaluate("2 + 3 × 4"));
-check("subtraction",       T.parseAndEvaluate("100 − 50") === 50, 50, T.parseAndEvaluate("100 − 50"));
-check("division (clean)",  T.parseAndEvaluate("100 ÷ 4") === 25, 25, T.parseAndEvaluate("100 ÷ 4"));
+console.log("\ncomputeStep (Countdown rules, auto-oriented − and ÷):");
+check("add",      T.computeStep(75, "+", 6).value === 81, 81, T.computeStep(75, "+", 6));
+check("multiply", T.computeStep(75, "×", 6).value === 450, 450, T.computeStep(75, "×", 6));
+check("subtract keeps order when already positive",
+  JSON.stringify(T.computeStep(100, "−", 7)) === JSON.stringify({ ok: true, a: 100, b: 7, value: 93 }),
+  { ok: true, a: 100, b: 7, value: 93 }, T.computeStep(100, "−", 7));
+check("subtract swaps operands instead of going negative",
+  JSON.stringify(T.computeStep(7, "−", 100)) === JSON.stringify({ ok: true, a: 100, b: 7, value: 93 }),
+  { ok: true, a: 100, b: 7, value: 93 }, T.computeStep(7, "−", 100));
+check("subtract equal values is rejected (pointless zero)",
+  T.computeStep(5, "−", 5).ok === false, false, T.computeStep(5, "−", 5));
+check("divide clean", T.computeStep(100, "÷", 4).value === 25, 25, T.computeStep(100, "÷", 4));
+check("divide swaps operands when only the other way is whole",
+  JSON.stringify(T.computeStep(4, "÷", 100)) === JSON.stringify({ ok: true, a: 100, b: 4, value: 25 }),
+  { ok: true, a: 100, b: 4, value: 25 }, T.computeStep(4, "÷", 100));
+check("non-integer division is rejected", T.computeStep(10, "÷", 3).ok === false, false, T.computeStep(10, "÷", 3));
 
-let threw = false;
-try { T.parseAndEvaluate("10 − 20"); } catch (_) { threw = true; }
-check("negative intermediate result is rejected", threw, true, threw);
+console.log("\nreplaySteps (steps are the source of truth):");
+const pool = [75, 6, 22, 100, 4, 3];
+const s0 = T.replaySteps(pool, []);
+check("no steps → six original tiles, none used",
+  s0.tiles.length === 6 && s0.tiles.every(t => !t.used && !t.derived), "6 fresh tiles", s0.tiles);
+const s1 = T.replaySteps(pool, [{ aId: "t0", op: "×", bId: "t1" }]);
+check("one step consumes both tiles and adds d1",
+  s1.tiles.length === 7 && s1.tiles[0].used && s1.tiles[1].used && s1.tiles[6].id === "d1" && s1.tiles[6].value === 450,
+  "t0,t1 used; d1=450", s1.tiles);
+check("step trace renders as a line",
+  JSON.stringify(s1.detail) === JSON.stringify([{ a: 75, op: "×", b: 6, value: 450, tileId: "d1" }]),
+  [{ a: 75, op: "×", b: 6, value: 450, tileId: "d1" }], s1.detail);
+const s2 = T.replaySteps(pool, [{ aId: "t0", op: "×", bId: "t1" }, { aId: "d1", op: "+", bId: "t2" }]);
+check("derived tiles can be combined again",
+  s2.tiles[7].value === 472 && s2.tiles[6].used, "d2=472, d1 used", s2.tiles);
+check("expression string nests correctly",
+  T.stripOuterParens(s2.tiles[7].expr) === "(75 × 6) + 22", "(75 × 6) + 22", s2.tiles[7].expr);
+const s3 = T.replaySteps(pool, [{ aId: "t1", op: "−", bId: "t0" }]);
+check("swapped subtraction records the computed orientation in the expr",
+  s3.tiles[6].expr === "(75 − 6)" && s3.detail[0].a === 75, "(75 − 6)", s3.tiles[6]);
+const s4 = T.replaySteps(pool, [{ aId: "t0", op: "×", bId: "t1" }, { aId: "t0", op: "+", bId: "t2" }]);
+check("a step reusing a consumed tile stops the replay (corrupt save degrades safely)",
+  s4.detail.length === 1 && s4.tiles.length === 7, "1 step applied", s4.detail);
+const s5 = T.replaySteps(pool, [{ aId: "t4", op: "÷", bId: "t5" }]);
+check("an invalid step stops the replay",
+  s5.detail.length === 0 && s5.tiles.length === 6, "0 steps applied", s5.detail);
 
-threw = false;
-try { T.parseAndEvaluate("10 ÷ 3"); } catch (_) { threw = true; }
-check("non-integer division is rejected", threw, true, threw);
-
-threw = false;
-try { T.parseAndEvaluate("100 + 100"); } catch (_) { threw = true; }
-check("reusing a tile more than available is rejected", threw, true, threw);
-
-console.log("\nparseAndEvaluate (loose mode for live preview):");
-check("loose mode allows negative intermediate",
-  T.parseAndEvaluate("10 − 20", { loose: true }) === -10, -10,
-  T.parseAndEvaluate("10 − 20", { loose: true }));
+console.log("\nbestTile:");
+check("no derived tiles → null", T.bestTile(s0.tiles, 472) === null, null, T.bestTile(s0.tiles, 472));
+check("picks the closest made tile", T.bestTile(s2.tiles, 470).id === "d2", "d2", T.bestTile(s2.tiles, 470));
+check("ignores unused originals even if closer",
+  T.bestTile(s1.tiles, 100).id === "d1", "d1 (100 is an original)", T.bestTile(s1.tiles, 100));
 
 console.log("\nformatClock:");
 check("5 minutes",     T.formatClock(300_000) === "5:00", "5:00", T.formatClock(300_000));

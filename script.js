@@ -265,24 +265,88 @@ function yesterdayKey(todayK) {
 
 let rng = Math.random;
 
+// --- Step engine (pure; exercised by tests.js) ---
+// A round is a list of steps, each combining two live tiles into a new one.
+// `steps` is the single source of truth: [{ aId, op, bId }]. Everything
+// else (the live tile set, the step trace, the best value so far) is
+// derived by replaying it against the day's pool. Undo is just pop().
+
+// Combine two values. Countdown rules: no negatives, no fractions.
+// − and ÷ are auto-oriented (larger first / divisible first) so the player
+// never has to think about tap order; the trace shows the form computed.
+function computeStep(a, op, b) {
+  switch (op) {
+    case "+": return { ok: true, a, b, value: a + b };
+    case "×": return { ok: true, a, b, value: a * b };
+    case "−": {
+      const [hi, lo] = a >= b ? [a, b] : [b, a];
+      if (hi === lo) return { ok: false, error: `${a} − ${b} = 0 — that won't help.` };
+      return { ok: true, a: hi, b: lo, value: hi - lo };
+    }
+    case "÷": {
+      if (a === 0 || b === 0) return { ok: false, error: "Can't divide by zero." };
+      if (a % b === 0) return { ok: true, a, b, value: a / b };
+      if (b % a === 0) return { ok: true, a: b, b: a, value: b / a };
+      return { ok: false, error: `${a} ÷ ${b} isn't a whole number.` };
+    }
+    default: return { ok: false, error: "Unknown operator." };
+  }
+}
+
+// Replay steps against the pool. Returns the live tile list (originals
+// t0..t5 then derived d1..dN, each with used flag + expression string) and
+// a detail trace for the on-screen working. Stops at the first step that
+// can't be applied, so a corrupt saved round degrades to a shorter one.
+function replaySteps(pool, steps) {
+  const tiles = pool.map((v, i) => ({ id: `t${i}`, value: v, expr: String(v), used: false, derived: false }));
+  const detail = [];
+  const byId = id => tiles.find(t => t.id === id);
+  for (let i = 0; i < (steps || []).length; i++) {
+    const s = steps[i];
+    const a = byId(s.aId), b = byId(s.bId);
+    if (!a || !b || a === b || a.used || b.used) break;
+    const r = computeStep(a.value, s.op, b.value);
+    if (!r.ok) break;
+    a.used = true; b.used = true;
+    const [ea, eb] = r.a === a.value && (r.b === b.value) ? [a.expr, b.expr] : [b.expr, a.expr];
+    const nt = { id: `d${i + 1}`, value: r.value, expr: `(${ea} ${s.op} ${eb})`, used: false, derived: true };
+    tiles.push(nt);
+    detail.push({ a: r.a, op: s.op, b: r.b, value: r.value, tileId: nt.id });
+  }
+  return { tiles, detail };
+}
+
+// Closest tile to the target among everything the player has made. Ties go
+// to the most recently made tile (it's what they were working towards).
+function bestTile(tiles, target) {
+  let best = null;
+  for (const t of tiles) {
+    if (!t.derived) continue;
+    const d = Math.abs(t.value - target);
+    if (!best || d <= Math.abs(best.value - target)) best = t;
+  }
+  return best;
+}
+
 // --- DOM ---
 const puzzleDateEl    = document.getElementById("puzzleDate");
 const targetEl        = document.getElementById("target");
-const currentEl       = document.getElementById("current");
 const timerBar        = document.getElementById("timerBar");
+const timerFill       = document.getElementById("timerFill");
 const timerReadout    = document.getElementById("timerReadout");
 const startArea       = document.getElementById("startArea");
-const startBtn        = document.getElementById("startBtn");
 const lockedNotice    = document.getElementById("lockedNotice");
 const lockedSummary   = document.getElementById("lockedSummary");
 const lockedSolution  = document.getElementById("lockedSolution");
 const lockedShareBtn  = document.getElementById("lockedShareBtn");
 const lockedCountdown = document.getElementById("lockedCountdown");
+const boardEl         = document.getElementById("board");
 const numbersRow      = document.getElementById("numbersRow");
-const exprInput       = document.getElementById("exprInput");
+const derivedRow      = document.getElementById("derivedRow");
+const stepsList       = document.getElementById("stepsList");
+const stepsEmpty      = document.getElementById("stepsEmpty");
+const undoBtn         = document.getElementById("undoBtn");
 const statusEl        = document.getElementById("status");
-const backspaceBtn    = document.getElementById("backspaceBtn");
-const resetBtn        = document.getElementById("resetBtn");
 const submitBtn       = document.getElementById("submitBtn");
 const endModal        = document.getElementById("endModal");
 const endTitle        = document.getElementById("endTitle");
@@ -297,28 +361,10 @@ const lockedShareBar  = document.getElementById("lockedShareBar");
 const introModal      = document.getElementById("introModal");
 const introCloseBtn   = document.getElementById("introCloseBtn");
 const helpBtn         = document.getElementById("helpBtn");
-const themeBtn        = document.getElementById("themeBtn");
 const opButtons       = Array.from(document.querySelectorAll(".op-btn"));
 const hintRow         = document.getElementById("hintRow");
 const hintBtn         = document.getElementById("hintBtn");
 const hintDisplay     = document.getElementById("hintDisplay");
-
-// Build the timer bar once. 60 cells regardless of round length — each cell
-// represents an equal slice of the total time (5s per cell at 5min limit).
-const TIMER_CELLS = 60;
-const MS_PER_CELL = TIME_LIMIT_MS / TIMER_CELLS;
-const timerCells = [];
-for (let i = 0; i < TIMER_CELLS; i++) {
-  const c = document.createElement("div");
-  c.className = "cell";
-  // Hue per cell: 0 (red) at the leftmost, 120 (green) at the rightmost.
-  // Cells deplete from the right, so the green end disappears first and red
-  // gets exposed as the round runs down.
-  const hue = (i / (TIMER_CELLS - 1)) * 120;
-  c.style.setProperty("--cell-hue", String(hue));
-  timerBar.appendChild(c);
-  timerCells.push(c);
-}
 
 // --- State ---
 let state;
@@ -350,8 +396,8 @@ function newPuzzle({ devRandom = false } = {}) {
   const alreadyPlayed = stored && stored.lastPlayed && stored.lastPlayed.date === today;
   const stats = (stored && stored.stats) || defaultStats();
   // Resume an in-progress round if one exists for today and hasn't been
-  // finalised. Refreshing now restores the original startTimeMs and the
-  // expression-in-progress instead of resetting the clock.
+  // finalised. Refreshing restores the original startTimeMs and the steps
+  // taken so far instead of resetting the clock.
   const activeRound = (!alreadyPlayed && stored && stored.activeRound
     && stored.activeRound.date === today)
     ? stored.activeRound : null;
@@ -365,7 +411,8 @@ function newPuzzle({ devRandom = false } = {}) {
   state = {
     pool,
     day: today, // the date this puzzle was generated for — used to auto-refresh across midnight
-    expression: activeRound ? (activeRound.expression || "") : "",
+    steps: activeRound ? (activeRound.steps || []) : [],
+    sel: { aId: null, op: null },
     target,
     phase: alreadyPlayed ? "locked" : (activeRound ? "running" : "idle"),
     startTimeMs: activeRound ? activeRound.startTimeMs : 0,
@@ -379,29 +426,24 @@ function newPuzzle({ devRandom = false } = {}) {
              : 0,
   };
 
-  exprInput.value = state.expression;
   endModal.hidden = true;
-  startArea.hidden = false;
   setStatus("");
 
   if (alreadyPlayed) {
     showLockedInline();
-  } else if (activeRound) {
-    // Resuming after refresh.
-    startArea.hidden = true;
-    startBtn.hidden = true;
-    lockedNotice.hidden = true;
-    const remaining = state.endTimeMs - Date.now();
-    if (remaining <= 0) {
-      // Clock already expired during the refresh — finalise as a timeout
-      // with whatever expression was in progress.
-      timeUp();
-    } else {
-      scheduleTick();
-    }
   } else {
-    startBtn.hidden = false;
+    startArea.hidden = true;
     lockedNotice.hidden = true;
+    if (activeRound) {
+      const remaining = state.endTimeMs - Date.now();
+      if (remaining <= 0) {
+        // Clock already expired during the refresh — finalise as a timeout
+        // with whatever was made so far.
+        timeUp();
+      } else {
+        scheduleTick();
+      }
+    }
   }
 
   render();
@@ -422,7 +464,6 @@ function shuffleInPlace(a) {
 
 function showLockedInline() {
   startArea.hidden = false;
-  startBtn.hidden = true;
   lockedNotice.hidden = false;
   const r = state.result;
   const hintSuffix = r && r.hintCount
@@ -470,21 +511,29 @@ function startCountdownTicker() {
 }
 
 // --- Round lifecycle ---
+// The clock starts on the first tile tap (no Start button). Tiles show "?"
+// until then so nobody can plan before the timer is running.
 function startRound() {
   if (state.phase !== "idle") return;
   state.phase = "running";
   state.startTimeMs = Date.now();
   state.endTimeMs = state.startTimeMs + TIME_LIMIT_MS;
-  persistActiveRound({
-    date: todayKey(),
-    startTimeMs: state.startTimeMs,
-    expression: "",
-    hintCount: 0,
-  });
-  startArea.hidden = true;
+  state.steps = [];
+  state.sel = { aId: null, op: null };
+  persistRound();
   setStatus("");
   scheduleTick();
   render();
+}
+
+function persistRound() {
+  if (state.phase !== "running") return;
+  persistActiveRound({
+    date: todayKey(),
+    startTimeMs: state.startTimeMs,
+    steps: state.steps,
+    hintCount: state.hintCount || 0,
+  });
 }
 
 function scheduleTick() {
@@ -506,29 +555,19 @@ function tick() {
 
 function timeUp() {
   if (state.phase !== "running") return;
-  state.phase = "ended";
-  let result = null;
-  let error = null;
-  if (state.expression.trim()) {
-    try { result = parseAndEvaluate(state.expression); }
-    catch (err) { error = err.message; }
-  }
-  finishRound(result, true, error);
+  const { tiles } = replaySteps(state.pool, state.steps);
+  finishRound(bestTile(tiles, state.target), true, TIME_LIMIT_MS);
 }
 
 function submitGuess() {
   if (state.phase !== "running") return;
-  if (state.expression.trim() === "") {
-    setStatus("Build your guess first — tap tiles and operators above.", "error");
+  const { tiles } = replaySteps(state.pool, state.steps);
+  const best = bestTile(tiles, state.target);
+  if (!best) {
+    setStatus("Combine some tiles first — tap a tile, an operator, then another tile.", "error");
     return;
   }
-  let result;
-  try { result = parseAndEvaluate(state.expression); }
-  catch (err) { setStatus(err.message, "error"); return; }
-  const timeUsedMs = Date.now() - state.startTimeMs;
-  if (tickHandle) { clearTimeout(tickHandle); tickHandle = null; }
-  state.phase = "ended";
-  finishRound(result, false, null, timeUsedMs);
+  finishRound(best, false, Date.now() - state.startTimeMs);
 }
 
 // Modal title keyed off accuracy tier + speed-based points. Faster, closer
@@ -559,31 +598,31 @@ function resultTitle(distance, points, byTimeout) {
   return "Next time.";
 }
 
-function finishRound(result, byTimeout, parseError, timeUsedMs = TIME_LIMIT_MS) {
-  const exprText = state.expression.replace(/=.*/, "").trim();
-  let title, message;
+// `tile` is the player's declared tile (closest made value), or null when
+// they never combined anything.
+function finishRound(tile, byTimeout, timeUsedMs = TIME_LIMIT_MS) {
+  if (tickHandle) { clearTimeout(tickHandle); tickHandle = null; }
   state.phase = "locked";
+  state.sel = { aId: null, op: null };
 
+  let title, message;
   let points = 0;
   const hintCount = state.hintCount || 0;
-  if (result === null) {
+  const hintTail = hintCount
+    ? `\n${hintCount} hint${hintCount === 1 ? "" : "s"} used.`
+    : "";
+  if (!tile) {
     state.result = { kind: "noanswer", points: 0, timeUsedMs, hintCount };
     title = "Time's up";
-    const hintTail = hintCount
-      ? `\n${hintCount} hint${hintCount === 1 ? "" : "s"} used.`
-      : "";
-    message = parseError
-      ? `No guess (${parseError})${hintTail}`
-      : `You didn't submit an expression.${hintTail}`;
+    message = `You didn't make anything.${hintTail}`;
   } else {
+    const result = tile.value;
+    const exprText = stripOuterParens(tile.expr);
     const distance = Math.abs(result - state.target);
     points = pointsFor(distance, timeUsedMs);
     state.result = { exprText, result, distance, byTimeout, timeUsedMs, points, hintCount };
     const clock = formatClock(timeUsedMs);
     title = resultTitle(distance, points, byTimeout);
-    const hintTail = hintCount
-      ? `\n${hintCount} hint${hintCount === 1 ? "" : "s"} used.`
-      : "";
     if (distance === 0) {
       message = `${points}/10 — solved in ${clock}.\n${exprText} = ${result}${hintTail}`;
     } else if (distance <= 5) {
@@ -627,6 +666,7 @@ function finishRound(result, byTimeout, parseError, timeUsedMs = TIME_LIMIT_MS) 
   renderStats(endStats);
   showLockedInline();
   render();
+  renderTimer(0);
 }
 
 function renderSolution(container, result) {
@@ -677,110 +717,67 @@ function renderStats(container) {
   }
 }
 
-// --- Expression building (append helpers) ---
-function lastNonSpace(s) {
-  for (let i = s.length - 1; i >= 0; i--) if (s[i] !== " ") return s[i];
-  return "";
-}
-
-function appendNumber(n) {
+// --- Tap handling ---
+function tapTile(id) {
+  if (state.phase === "idle") { startRound(); return; }
   if (state.phase !== "running") return;
-  const e = state.expression;
-  const last = lastNonSpace(e);
-  if (e === "") {
-    setExpression(String(n));
-    return;
-  }
-  if (last === "(") {
-    // Keep parens tight against their contents: (8 × 10), not ( 8 × 10).
-    setExpression(e + n);
-    return;
-  }
-  if (OP_CHARS.includes(last)) {
-    setExpression(e.endsWith(" ") ? e + n : e + " " + n);
-    return;
-  }
-  // last is a digit or ')'
-  setStatus("Add an operator before another number.", "error");
-}
-
-function appendOp(op) {
-  if (state.phase !== "running") return;
-  let e = state.expression.replace(/\s+$/, "");
-  const last = lastNonSpace(e);
-
-  if (op === "(") {
-    if (e === "") {
-      e = "(";
-    } else if (last === "(") {
-      // Tight after another open paren: (( not ( (.
-      e = e + "(";
-    } else if (OP_CHARS.includes(last)) {
-      e = e + " (";
-    } else {
-      e = e + " × (";
-    }
-    setExpression(e);
-    return;
-  }
-  if (op === ")") {
-    if (last === "" || last === "(" || OP_CHARS.includes(last)) {
-      setStatus("Can't close — nothing to close.", "error");
-      return;
-    }
-    if (countParens(e) <= 0) {
-      setStatus("No '(' to match.", "error");
-      return;
-    }
-    setExpression(e + ")");
-    return;
-  }
-  if (e === "" || last === "(") {
-    setStatus("Need a number before an operator.", "error");
-    return;
-  }
-  if (OP_CHARS.includes(last)) {
-    e = e.slice(0, -1).replace(/\s+$/, "") + " " + op;
-  } else {
-    e = e + " " + op;
-  }
-  setExpression(e);
-}
-
-function countParens(e) {
-  let open = 0;
-  for (const c of e) {
-    if (c === "(") open++;
-    else if (c === ")") open--;
-  }
-  return open;
-}
-
-function backspace() {
-  if (state.phase !== "running") return;
-  let e = state.expression.replace(/\s+$/, "");
-  if (e === "") return;
-  const m = e.match(/^(.*?)(\s*)(\d+|[()+−×÷])$/);
-  setExpression(m ? m[1].replace(/\s+$/, "") : "");
-}
-
-function clearExpression() {
-  if (state.phase !== "running") return;
-  setExpression("");
-}
-
-function setExpression(e) {
-  state.expression = e;
-  exprInput.value = e;
+  const sel = state.sel;
   setStatus("");
-  // Mirror the in-progress expression to storage so refresh resumes here.
-  if (state.phase === "running") {
-    persistActiveRound({
-      date: todayKey(),
-      startTimeMs: state.startTimeMs,
-      expression: e,
-      hintCount: state.hintCount || 0,
-    });
+  if (sel.aId === id) {
+    // Tapping the selected tile again clears the selection.
+    state.sel = { aId: null, op: null };
+  } else if (sel.aId && sel.op) {
+    applyStep(sel.aId, sel.op, id);
+    return;
+  } else {
+    // Either nothing selected, or a tile selected with no operator yet:
+    // this tile becomes the selection.
+    state.sel = { aId: id, op: null };
+  }
+  render();
+}
+
+function tapOp(op) {
+  if (state.phase !== "running") return;
+  if (!state.sel.aId) {
+    setStatus("Pick a tile first.", "error");
+    return;
+  }
+  state.sel.op = state.sel.op === op ? null : op;
+  setStatus("");
+  render();
+}
+
+function applyStep(aId, op, bId) {
+  const { tiles } = replaySteps(state.pool, state.steps);
+  const a = tiles.find(t => t.id === aId), b = tiles.find(t => t.id === bId);
+  if (!a || !b || a.used || b.used) { state.sel = { aId: null, op: null }; render(); return; }
+  const r = computeStep(a.value, op, b.value);
+  if (!r.ok) {
+    setStatus(r.error, "error");
+    return; // keep the selection so they can pick a different second tile
+  }
+  state.steps.push({ aId, op, bId });
+  state.sel = { aId: null, op: null };
+  persistRound();
+  if (r.value === state.target) {
+    // Hit it — finish straight away, no Submit needed.
+    render();
+    const made = replaySteps(state.pool, state.steps).tiles;
+    finishRound(made[made.length - 1], false, Date.now() - state.startTimeMs);
+    return;
+  }
+  render();
+}
+
+function undo() {
+  if (state.phase !== "running") return;
+  setStatus("");
+  if (state.sel.aId || state.sel.op) {
+    state.sel = { aId: null, op: null };
+  } else if (state.steps.length) {
+    state.steps.pop();
+    persistRound();
   }
   render();
 }
@@ -792,13 +789,7 @@ function useHint() {
   const max = hintLevelsCount(state.solutionExpr);
   if ((state.hintCount || 0) >= max) return;
   state.hintCount = (state.hintCount || 0) + 1;
-  // Persist so refresh restores both the count and the visible hint.
-  persistActiveRound({
-    date: todayKey(),
-    startTimeMs: state.startTimeMs,
-    expression: state.expression || "",
-    hintCount: state.hintCount,
-  });
+  persistRound();
   renderHint();
 }
 
@@ -807,11 +798,10 @@ function renderHint() {
   // Hide the entire row whenever the hint button shouldn't be reachable:
   //   - no exact solution exists
   //   - round isn't actively running
-  //   - no expression has been built yet (a hint is for getting unstuck,
-  //     not for starting cold)
-  const hasExpression = !!(state && state.expression && state.expression.trim() !== "");
+  //   - no step taken yet (a hint is for getting unstuck, not starting cold)
+  const hasSteps = !!(state && state.steps && state.steps.length);
   const canShow = state && state.phase === "running" && !!state.solutionExpr
-    && (hasExpression || (state.hintCount || 0) > 0);
+    && (hasSteps || (state.hintCount || 0) > 0);
   hintRow.classList.toggle("is-hidden", !canShow);
   hintRow.hidden = !canShow;
   if (!canShow) return;
@@ -856,6 +846,7 @@ function buildCumulativeHintDisplay(count, solutionExpr) {
   return lines.join("\n");
 }
 
+// --- Tokenizer (used by the hint AST parser) ---
 // --- Tokenizer / parser ---
 function tokenize(input) {
   const eq = input.indexOf("=");
@@ -887,77 +878,6 @@ function tokenize(input) {
     i++;
   }
   return tokens;
-}
-
-function parseAndEvaluate(input, opts = {}) {
-  const loose = opts.loose === true;
-  const tokens = tokenize(input);
-  if (tokens.length === 0) throw new Error("Expression is empty.");
-
-  const poolCounts = new Map();
-  for (const v of state.pool) poolCounts.set(v, (poolCounts.get(v) || 0) + 1);
-  const usedCounts = new Map();
-  for (const t of tokens) {
-    if (t.type === "NUM") usedCounts.set(t.value, (usedCounts.get(t.value) || 0) + 1);
-  }
-  for (const [v, used] of usedCounts) {
-    const avail = poolCounts.get(v) || 0;
-    if (avail === 0) throw new Error(`Number ${v} isn't in this puzzle.`);
-    if (used > avail) throw new Error(`You used ${v} ${used} times, but only ${avail} available.`);
-  }
-
-  let pos = 0;
-  const peek = () => tokens[pos];
-  const consume = () => tokens[pos++];
-
-  function parseFactor() {
-    const t = peek();
-    if (!t) throw new Error("Unexpected end of expression.");
-    if (t.type === "NUM") { consume(); return t.value; }
-    if (t.type === "PAREN" && t.value === "(") {
-      consume();
-      const v = parseExpr();
-      const close = peek();
-      if (!close || close.value !== ")") throw new Error("Missing ')'.");
-      consume();
-      return v;
-    }
-    throw new Error(`Unexpected token: "${t.value}".`);
-  }
-  function parseTerm() {
-    let left = parseFactor();
-    while (true) {
-      const t = peek();
-      if (!t || t.type !== "OP" || (t.value !== "×" && t.value !== "÷")) break;
-      consume();
-      const right = parseFactor();
-      left = applyOp(left, t.value, right);
-    }
-    return left;
-  }
-  function parseExpr() {
-    let left = parseTerm();
-    while (true) {
-      const t = peek();
-      if (!t || t.type !== "OP" || (t.value !== "+" && t.value !== "−")) break;
-      consume();
-      const right = parseTerm();
-      left = applyOp(left, t.value, right);
-    }
-    return left;
-  }
-  function applyOp(a, op, b) {
-    if (op === "÷" && b === 0) throw new Error("Division by zero.");
-    const r = OPS[op](a, b);
-    if (loose) return r;
-    if (op === "÷" && !Number.isInteger(r)) throw new Error(`Division must be whole (${a} ÷ ${b} = ${r}).`);
-    if (r < 0) throw new Error(`Intermediate result can't be negative (${a} ${op} ${b} = ${r}).`);
-    return r;
-  }
-
-  const result = parseExpr();
-  if (pos < tokens.length) throw new Error(`Unexpected token: "${tokens[pos].value}".`);
-  return result;
 }
 
 // --- Solver: bitmask DP over tile subsets. ---
@@ -1118,9 +1038,10 @@ async function shareResult(btn) {
 // --- Rendering ---
 function render() {
   targetEl.textContent = String(state.target);
-  renderTiles();
-  renderControls();
-  renderCurrent();
+  const { tiles, detail } = replaySteps(state.pool, state.steps);
+  renderTiles(tiles);
+  renderSteps(detail);
+  renderControls(detail);
   renderHint();
 }
 
@@ -1134,102 +1055,86 @@ function formatClock(ms) {
 function renderTimer(ms) {
   const running = state && state.phase === "running";
   const idle = state && state.phase === "idle";
-  // On idle (pre-round) show a full green bar; once the round ends/locks, show the bar empty.
-  const cellsLit = running ? Math.max(0, Math.ceil(ms / MS_PER_CELL))
-                 : idle    ? TIMER_CELLS
-                 :           0;
-  const readoutMs = running ? ms : (idle ? TIME_LIMIT_MS : 0);
-  timerReadout.textContent = formatClock(readoutMs);
+  // Idle (pre-round) shows a full bar; once the round ends/locks it's empty.
+  const shownMs = running ? ms : (idle ? TIME_LIMIT_MS : 0);
+  timerReadout.textContent = formatClock(shownMs);
+  timerFill.style.width = `${(shownMs / TIME_LIMIT_MS) * 100}%`;
   const danger = running && ms <= DANGER_AT_MS;
   const warn = running && ms <= WARN_AT_MS && ms > DANGER_AT_MS;
   timerBar.classList.toggle("danger", danger);
-  for (let i = 0; i < TIMER_CELLS; i++) {
-    const on = i < cellsLit;
-    const cell = timerCells[i];
-    cell.classList.toggle("on", on);
-    cell.classList.toggle("warn", on && warn);
-    cell.classList.toggle("danger", on && danger);
-  }
+  timerBar.classList.toggle("warn", warn);
 }
 
-function renderCurrent() {
-  if (!state || state.phase !== "running" || !state.expression.trim()) {
-    currentEl.textContent = "Total";
-    currentEl.classList.remove("has-value", "match");
-    return;
-  }
-  let value;
-  // Loose mode: show the running total even for expressions that break
-  // Countdown rules (negative intermediates, non-integer division). The
-  // strict check runs at submit time so the player sees what they've built.
-  try { value = parseAndEvaluate(state.expression, { loose: true }); }
-  catch (_) {
-    // Mid-build state — e.g. "50 ×" with a trailing operator. We're in
-    // a running game, just don't have a parseable expression yet.
-    // Show "—" rather than the pre-game "Total" label so it reads as
-    // "still being built" instead of "no game in progress."
-    currentEl.textContent = "—";
-    currentEl.classList.remove("has-value", "match");
-    return;
-  }
-  currentEl.textContent = String(value);
-  currentEl.classList.add("has-value");
-  currentEl.classList.toggle("match", value === state.target);
+function makeTileButton(t) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tile";
+  if (t.derived) btn.classList.add("derived");
+  if (t.used) btn.classList.add("used");
+  if (state.sel.aId === t.id) btn.classList.add("selected");
+  btn.disabled = state.phase !== "running" || t.used;
+  btn.textContent = String(t.value);
+  btn.addEventListener("click", () => tapTile(t.id));
+  return btn;
 }
 
-function renderTiles() {
+function renderTiles(tiles) {
   numbersRow.innerHTML = "";
+  derivedRow.innerHTML = "";
   if (state.phase === "idle") {
+    // Concealed tiles: tapping any one reveals the board and starts the clock.
     for (let i = 0; i < state.pool.length; i++) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "tile hidden-tile";
-      btn.disabled = true;
       btn.textContent = "?";
+      btn.setAttribute("aria-label", "Tap to reveal the tiles and start the clock");
+      btn.addEventListener("click", () => tapTile(null));
       numbersRow.appendChild(btn);
     }
+    derivedRow.hidden = true;
     return;
   }
-  const usedCounts = (() => {
-    const c = new Map();
-    const nums = state.expression.match(/\d+/g) || [];
-    for (const n of nums) {
-      const v = parseInt(n, 10);
-      c.set(v, (c.get(v) || 0) + 1);
-    }
-    return c;
-  })();
-  const seen = new Map();
-  state.pool.forEach(value => {
-    const k = (seen.get(value) || 0) + 1;
-    seen.set(value, k);
-    const used = k <= (usedCounts.get(value) || 0);
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "tile";
-    if (used) btn.classList.add("used");
-    // A used tile must be uncliclable, not just greyed — otherwise a
-    // double-tap silently builds an invalid expression and Submit fails
-    // later with a small status line that's easy to miss.
-    btn.disabled = state.phase !== "running" || used;
-    btn.textContent = String(value);
-    btn.addEventListener("click", () => appendNumber(value));
-    numbersRow.appendChild(btn);
-  });
+  const derived = tiles.filter(t => t.derived);
+  tiles.filter(t => !t.derived).forEach(t => numbersRow.appendChild(makeTileButton(t)));
+  derived.forEach(t => derivedRow.appendChild(makeTileButton(t)));
+  derivedRow.hidden = derived.length === 0;
 }
 
-function renderControls() {
-  const empty = state.expression.trim() === "";
+function renderSteps(detail) {
+  stepsList.innerHTML = "";
+  for (const s of detail) {
+    const li = document.createElement("li");
+    li.textContent = `${s.a} ${s.op} ${s.b} = ${s.value}`;
+    stepsList.appendChild(li);
+  }
   const running = state.phase === "running";
-  backspaceBtn.disabled = !running || empty;
-  resetBtn.disabled     = !running || empty;
-  // Submit stays clickable when the expression is empty so a tap can
-  // trigger the "build an expression first" helper. Visually muted via
-  // the .muted class so it still reads as not-yet-usable.
-  submitBtn.disabled    = !running;
-  submitBtn.classList.toggle("muted", running && empty);
-  exprInput.disabled    = !running;
-  opButtons.forEach(b => { b.disabled = !running; });
+  if (state.phase === "idle") {
+    stepsEmpty.textContent = "Tap a tile to reveal the numbers and start the clock.";
+  } else if (state.sel.aId && !state.sel.op) {
+    stepsEmpty.textContent = "Now pick an operator.";
+  } else if (state.sel.aId && state.sel.op) {
+    stepsEmpty.textContent = "Now tap a second tile.";
+  } else {
+    stepsEmpty.textContent = "Tap a tile, an operator, then another tile.";
+  }
+  stepsEmpty.hidden = !(running || state.phase === "idle") || (detail.length > 0 && !state.sel.aId);
+}
+
+function renderControls(detail) {
+  const running = state.phase === "running";
+  const hasSel = !!(state.sel.aId || state.sel.op);
+  boardEl.hidden = state.phase === "locked";
+  undoBtn.disabled = !running || (!hasSel && detail.length === 0);
+  undoBtn.textContent = hasSel ? "Cancel" : "Undo";
+  // Submit stays clickable when nothing's been made so a tap can trigger
+  // the helper message. Visually muted so it still reads as not-yet-usable.
+  submitBtn.disabled = !running;
+  submitBtn.classList.toggle("muted", running && detail.length === 0);
+  opButtons.forEach(b => {
+    b.disabled = !running || !state.sel.aId;
+    b.classList.toggle("selected", running && state.sel.op === b.dataset.op);
+  });
 }
 
 function setStatus(msg, kind) {
@@ -1239,10 +1144,8 @@ function setStatus(msg, kind) {
 }
 
 // --- Wire-up ---
-startBtn.addEventListener("click", startRound);
-opButtons.forEach(b => b.addEventListener("click", () => appendOp(b.dataset.op)));
-backspaceBtn.addEventListener("click", backspace);
-resetBtn.addEventListener("click", clearExpression);
+opButtons.forEach(b => b.addEventListener("click", () => tapOp(b.dataset.op)));
+undoBtn.addEventListener("click", undo);
 submitBtn.addEventListener("click", submitGuess);
 if (hintBtn) hintBtn.addEventListener("click", useHint);
 newGameBtn.addEventListener("click", () => { endModal.hidden = true; });
@@ -1261,39 +1164,19 @@ function dismissIntro() {
 helpBtn.addEventListener("click", showIntro);
 introCloseBtn.addEventListener("click", dismissIntro);
 
-// --- Theme toggle ---
-// Effective theme already applied by the inline <head> script; we just
-// reflect it in the button icon and wire click to flip + persist.
+// --- Theme ---
+// Follows the OS. The <head> script already applied it before first paint;
+// this just keeps it in sync if the OS setting changes while the tab is
+// open. A stored explicit choice (from the old toggle) still wins.
 const THEME_KEY = "crunch:theme";
-function currentTheme() {
-  return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
-}
-function applyTheme(theme, { persist = true } = {}) {
-  document.documentElement.setAttribute("data-theme", theme);
-  themeBtn.textContent = theme === "light" ? "🌙" : "☀️";
-  themeBtn.setAttribute("aria-label", theme === "light" ? "Switch to dark mode" : "Switch to light mode");
-  if (persist) {
-    try { localStorage.setItem(THEME_KEY, theme); } catch (_) { }
-  }
-}
-applyTheme(currentTheme(), { persist: false });
-themeBtn.addEventListener("click", () => {
-  applyTheme(currentTheme() === "light" ? "dark" : "light");
-});
-
-// Auto-follow OS theme changes — but only when the player hasn't made an
-// explicit choice. Once they tap the toggle, their preference sticks.
 const systemDarkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 systemDarkQuery.addEventListener("change", e => {
-  if (localStorage.getItem(THEME_KEY)) return; // explicit choice wins
-  applyTheme(e.matches ? "dark" : "light", { persist: false });
+  try { if (localStorage.getItem(THEME_KEY)) return; } catch (_) { }
+  document.documentElement.setAttribute("data-theme", e.matches ? "dark" : "light");
 });
 introModal.addEventListener("click", e => {
   if (e.target === introModal) dismissIntro();
 });
-
-// Expression field is display-only — all input flows through tile/op
-// buttons, which call setExpression() and persist the round there.
 
 // Dev reset: Cmd+Option+S (Mac) / Ctrl+Alt+S (others) clears the daily lock
 // AND re-rolls with a random seed so you get a fresh puzzle each time.

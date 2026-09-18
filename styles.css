@@ -136,28 +136,6 @@ header {
 }
 .help-btn:hover { color: var(--text); border-color: var(--accent); }
 
-.theme-btn {
-  position: absolute;
-  top: 0;
-  right: 2.5rem;
-  width: 2rem;
-  height: 2rem;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-dim);
-  font-family: inherit;
-  font-size: 1rem;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
-  padding: 0;
-}
-.theme-btn:hover { color: var(--text); border-color: var(--accent); }
-
 header h1 {
   margin: 0;
   display: inline-block;
@@ -213,13 +191,7 @@ main {
   padding: 0.5rem 0;
 }
 
-.target-area, .current-area {
-  text-align: center;
-}
-
-.target-label,
-.current-label,
-.guesses-label {
+.target-label {
   font-size: 0.75rem;
   color: var(--text-dim);
   text-transform: uppercase;
@@ -227,8 +199,7 @@ main {
   margin-bottom: 0.25rem;
 }
 
-.target-number,
-.current-number {
+.target-number {
   font-size: 3rem;
   font-weight: 700;
   line-height: 1;
@@ -237,41 +208,30 @@ main {
 }
 
 .target-number { color: var(--accent); }
-.current-number { color: var(--text-dim); }
-/* While the player is building an expression that computes to something,
- * the result reads in a dull gold — clearly "not the target yet" but
- * not failure either. Flips to bright green only on an exact match. */
-.current-number.has-value { color: var(--yellow); }
-.current-number.match     { color: var(--green); }
 
-/* Timer bar */
+/* Timer bar — one thin fill that drains left to right. */
 .timer-section {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.3rem;
 }
 .timer-bar {
-  display: flex;
-  gap: 2px;
-  height: 18px;
+  height: 8px;
   border-radius: 4px;
-  padding: 2px;
-  background: var(--surface);
+  background: var(--surface-2);
   border: 1px solid var(--border);
+  overflow: hidden;
 }
-.timer-bar .cell {
-  flex: 1 1 0;
-  min-width: 0;
-  background: var(--gray);
-  border-radius: 1px;
-  transition: background 0.15s;
+.timer-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--green);
+  border-radius: 3px;
+  transition: width 0.1s linear, background 0.3s;
 }
-/* Positional gradient: each cell's hue is set inline (0 = red, 120 = green)
-   so the bar shows a smooth red→yellow→green sweep when full. The legacy
-   warn/danger per-cell overrides are no longer needed — running out of time
-   naturally exposes the red end of the bar. */
-.timer-bar .cell.on        { background: hsl(var(--cell-hue, 120), 55%, 45%); }
-.timer-bar.danger          { animation: pulse 0.8s ease-in-out infinite; }
+.timer-bar.warn .timer-fill   { background: var(--yellow); }
+.timer-bar.danger .timer-fill { background: var(--danger); }
+.timer-bar.danger             { animation: pulse 0.8s ease-in-out infinite; }
 .timer-readout {
   text-align: center;
   color: var(--text-dim);
@@ -298,33 +258,6 @@ main {
 .locked-notice strong { display: block; font-size: 1.05rem; margin-bottom: 0.35rem; }
 .locked-notice p { margin: 0.2rem 0; color: var(--text-dim); font-size: 0.9rem; }
 .locked-notice .hint { font-size: 0.8rem; opacity: 0.85; }
-
-.big {
-  padding: 1rem 1.5rem !important;
-  font-size: 1.1rem !important;
-  width: 100%;
-}
-
-/* Start button — outlined to twin the title's stamped look. Transparent
-   fill keeps the timer bar as the lone solid-green block, and the blue
-   Submit guess can own the "primary action" slot once a round is live. */
-#startBtn {
-  background: transparent;
-  border: 2px solid #2f6b3a;
-  color: #7ec070;
-  border-radius: 10px;
-  font-family: inherit;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-#startBtn:hover:not(:disabled) {
-  background: rgba(83, 141, 78, 0.12);
-  border-color: #538d4e;
-  color: #b8e6a8;
-}
-#startBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Stats grid (streak / wins) */
 .stats {
@@ -356,46 +289,6 @@ main {
 }
 .stat.streak .num { color: var(--streak-color); }
 
-/* Guess history */
-.guess-history {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-
-.guess-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.5rem 0.75rem;
-  border-radius: 6px;
-  background: var(--surface);
-  border-left: 4px solid var(--gray);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 0.9rem;
-}
-
-.guess-row.exact { border-left-color: var(--green); background: rgba(83, 141, 78, 0.15); }
-.guess-row.close { border-left-color: var(--yellow); background: rgba(181, 159, 59, 0.12); }
-.guess-row.far   { border-left-color: var(--gray); }
-
-.guess-expr { color: var(--text-dim); flex: 1; overflow-x: auto; white-space: nowrap; }
-.guess-result {
-  font-weight: 700;
-  color: var(--text);
-  margin-left: 0.75rem;
-  white-space: nowrap;
-}
-
-.guess-history:empty::before {
-  content: "No guesses yet.";
-  color: var(--text-dim);
-  font-size: 0.85rem;
-  font-style: italic;
-}
-
-/* Board — vertical stack of tiles / ops / results / submit, with a
- * consistent gap so each row has breathing room. */
 .board {
   display: flex;
   flex-direction: column;
@@ -428,188 +321,77 @@ main {
 
 .tile:hover:not(:disabled) { border-color: var(--accent); }
 .tile:active:not(:disabled) { transform: scale(0.96); }
-.tile.selected { border-color: var(--accent); background: rgba(79, 140, 255, 0.18); }
-.tile.used { opacity: 0.3; cursor: not-allowed; text-decoration: line-through; }
-.tile.derived { border-style: dashed; border-color: var(--accent); }
+.tile.selected {
+  border-color: var(--accent);
+  background: rgba(79, 140, 255, 0.18);
+  box-shadow: 0 0 0 2px var(--accent) inset, 0 0 12px rgba(79, 140, 255, 0.35);
+}
+.tile.used { opacity: 0.25; cursor: not-allowed; text-decoration: line-through; }
+.tile.derived { border-style: dashed; border-color: var(--accent); color: var(--text); }
 .tile.hidden-tile {
   color: var(--text-dim);
   background: var(--surface-2);
   border-style: dashed;
-  opacity: 0.6;
+  opacity: 0.8;
 }
+.tile.hidden-tile:hover { border-color: var(--green); color: var(--text); }
+/* Made tiles sit in their own row under the originals; left-aligned in
+   the same 6-column grid so they line up with the tiles above. */
+.derived-row[hidden] { display: none; }
 
-/* Results box — sits between operators and submit. Wraps the in-progress
- * expression, the live computed "Yours" value, and inline edit controls
- * (Clear + ⌫). Reads as one "equation in progress" block. */
-.results-box {
+/* Working — one line per step, plus Undo/Cancel. */
+.steps-box {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 0.75rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-/* Equals row — Clear on the left, the big "=" divider centred,
- * ⌫ on the right. Uses a 3-column grid (1fr auto 1fr) so the divider
- * is dead-centred in the row regardless of the buttons' different
- * widths; each button is anchored to its outer edge via justify-self. */
-.equals-row {
+  padding: 0.6rem 0.75rem;
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: 1fr auto;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.3rem 0 0.1rem;
+  gap: 0.25rem 0.75rem;
+  min-height: 3.2rem;
 }
-.equals-row > .edit-btn:first-child { justify-self: start; }
-.equals-row > .edit-btn:last-child  { justify-self: end; }
-.equals-divider {
-  width: 64px;
-  height: 10px;
-  border-top: 3px solid var(--text-dim);
-  border-bottom: 3px solid var(--text-dim);
-  user-select: none;
-  pointer-events: none;
-}
-
-/* Result line — centred, sits below the equals-divider. The result
- * number now stands alone since the equals "label" became the divider. */
-.results-equals {
-  display: flex;
-  align-items: baseline;
-  justify-content: center;
-  padding: 0.15rem 0;
-}
-.results-equals .current-number {
-  font-size: 1.8rem;
-  line-height: 1;
-}
-
-/* Edit buttons (Clear + ⌫). Shared styling regardless of which row they
- * live in. */
-.edit-btn {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 6px;
-  padding: 0.45rem 0.7rem;
-  font-size: 0.95rem;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-  min-width: 2.4rem;
-}
-.edit-btn:hover:not(:disabled) { border-color: var(--accent); }
-.edit-btn:active:not(:disabled) { transform: scale(0.96); }
-.edit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-/* Expression wrap — positioning context for the marquee hint that
- * overlays the empty input. */
-.expr-wrap {
-  position: relative;
-}
-
-/* Marquee-scrolling hint. Shown when #exprInput is empty (placeholder
- * is a single space so :placeholder-shown matches but the placeholder
- * itself is invisible). Hidden once the player taps the first tile. */
-.expr-hint {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  padding: 0 0.75rem;
-  pointer-events: none;
-  overflow: hidden;
-  white-space: nowrap;
-  color: var(--text-dim);
+.steps-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 1.05rem;
-  border-radius: 6px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  grid-column: 1;
 }
-.expr-hint span {
-  display: inline-block;
-  /* Starts off-screen right, scrolls leftward across the visible area,
-   * exits off-screen left, then loops. Slow enough to read comfortably. */
-  animation: expr-hint-scroll 14s linear infinite;
-  will-change: transform;
+.steps-list li:last-child { color: var(--text); font-weight: 700; }
+.steps-empty {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  grid-column: 1;
 }
-@keyframes expr-hint-scroll {
-  0%   { transform: translateX(100%); }
-  100% { transform: translateX(-100%); }
-}
-/* Hide the marquee once the expression has content. */
-.expr-wrap:has(#exprInput:not(:placeholder-shown)) .expr-hint {
-  display: none;
-}
-
-/* Accessibility-only helper — visible to screen readers, removed from
- * the visual layout. The marquee is aria-hidden, so this preserves the
- * instruction for assistive tech without showing it twice on screen. */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.results-edit button {
+.steps-empty[hidden] { display: none; }
+.undo-btn {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
   background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 6px;
-  padding: 0.45rem 0.7rem;
+  padding: 0.5rem 0.8rem;
   font-size: 0.95rem;
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
-  min-width: 2.4rem;
 }
-.results-edit button:hover:not(:disabled) { border-color: var(--accent); }
-.results-edit button:active:not(:disabled) { transform: scale(0.96); }
-.results-edit button:disabled { opacity: 0.4; cursor: not-allowed; }
-
-/* Builder area (legacy — wrapper still exists in older builds, keep
- * the class around so script.js doesn't choke on lookups elsewhere) */
-.builder {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.75rem;
-}
-
-#exprInput {
-  width: 100%;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 1.2rem;
-  padding: 0.6rem 0.75rem;
-  border-radius: 6px;
-  outline: none;
-  cursor: default;
-  user-select: none;
-  -webkit-user-select: none;
-  text-align: center;
-}
-#exprInput::placeholder { color: var(--text-dim); }
-
-.builder-hint {
-  color: var(--text-dim);
-  font-size: 0.8rem;
-  margin-top: 0.4rem;
-}
+.undo-btn:hover:not(:disabled) { border-color: var(--accent); }
+.undo-btn:active:not(:disabled) { transform: scale(0.96); }
+.undo-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.board[hidden] { display: none; }
 
 /* Operators */
 .operators {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 0.4rem;
 }
 
@@ -628,7 +410,7 @@ main {
 .op-btn:active:not(:disabled) { transform: scale(0.96); }
 .op-btn.selected { background: var(--accent); border-color: var(--accent); color: white; }
 .op-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-/* Math operators in a pale blue-white so they quietly echo the accent
+/* Operators in a pale blue-white so they quietly echo the accent
    palette (target number, Submit) without competing. */
 .op-btn[data-op="+"],
 .op-btn[data-op="−"],
@@ -636,13 +418,6 @@ main {
 .op-btn[data-op="÷"] {
   color: var(--op-color);
 }
-/* Parentheses sit slightly darker with a hint of dusty rose — they're
-   structural punctuation, so they recede behind the operators and tiles. */
-.op-btn[data-op="("],
-.op-btn[data-op=")"] {
-  color: var(--paren-color);
-}
-
 /* Hint row sits between the results box and Submit. Secondary affordance
    that stays out of the way until the player wants it. */
 .hint-row {
@@ -685,7 +460,7 @@ main {
   white-space: pre-line;
 }
 
-/* Controls — Submit guess alone now (Clear + ⌫ live inside .results-box). */
+/* Controls — the single full-width "I'm done" button. */
 .controls {
   display: grid;
   grid-template-columns: 1fr;
@@ -844,6 +619,6 @@ main {
 
 @media (max-width: 420px) {
   .tile { font-size: 1.1rem; }
-  .target-number, .current-number { font-size: 2.4rem; }
+  .target-number { font-size: 2.4rem; }
   header h1 { font-size: 2.1rem; letter-spacing: 0.1em; }
 }
